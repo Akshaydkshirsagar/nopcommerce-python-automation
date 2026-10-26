@@ -2,7 +2,7 @@
 .venv/
 venv/
 
-# Python cache
+# Python cache files
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -10,8 +10,10 @@ __pycache__/
 # Test execution artifacts
 logs/*
 !logs/.gitkeep
+
 screenshots/*
 !screenshots/.gitkeep
+
 reports/*
 !reports/.gitkeep
 
@@ -25,3 +27,6 @@ reports/*
 .idea/
 .DS_Store
 Thumbs.db
+# Local application logs
+db_logs.txt
+web_logs.txt

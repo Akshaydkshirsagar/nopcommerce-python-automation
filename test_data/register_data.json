@@ -1,0 +1,51 @@
+
+[
+  {
+    "test_case": "valid_registration",
+    "gender":"male",
+    "first_name": "Akshay",
+    "last_name": "Ksh",
+    "email": "valid_user_01@example.com",
+    "company": "Infy",
+    "password": "Test@123",
+    "confirm_password": "Test@123",
+    "newsletter": true,
+    "expected_result": "success"
+  },
+  {
+    "test_case": "password_mismatch",
+    "gender":"female",
+    "first_name": "Akshay",
+    "last_name": "Ksh",
+    "email": "mismatch_user_01@example.com",
+    "company": "Infy",
+    "password": "Test@123",
+    "confirm_password": "Wrong@123",
+    "newsletter": false,
+    "expected_result": "password_mismatch"
+  },
+  {
+    "test_case": "missing_first_name",
+    "gender":"male",
+    "first_name": "",
+    "last_name": "Ksh",
+    "email": "missing_name_01@example.com",
+    "company": "Infy",
+    "password": "Test@123",
+    "confirm_password": "Test@123",
+    "newsletter": true,
+    "expected_result": "required_field_error"
+  },
+  {
+    "test_case": "invalid_gender",
+    "gender":"other",
+    "first_name": "",
+    "last_name": "Ksh",
+    "email": "missing_name_01@example.com",
+    "company": "Infy",
+    "password": "Test@123",
+    "confirm_password": "Test@123",
+    "newsletter": true,
+    "expected_result": "required_field_error"
+  }
+]

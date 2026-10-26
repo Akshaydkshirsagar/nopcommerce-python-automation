@@ -2,15 +2,9 @@ import json
 import pytest
 from pathlib import Path
 from pages.register_page import RegisterPage
-import uuid
+from utilities.test_data_generator import generate_unique_email
 from utilities.logger import get_logger
-
 logger = get_logger(__name__)
-
-# unique email _generate helper function
-def generate_unique_email(base_email):
-    unique_id=uuid.uuid4().hex[:8]
-    return base_email.replace('@',f"_{unique_id}@")
 
 DATA_FILE=(Path(__file__).resolve().parents[1]/"test_data"/"register_data.json")
 

@@ -38,7 +38,7 @@
   },
   {
     "test_case": "invalid_gender",
-    "gender":"other",
+    "gender":"male",
     "first_name": "",
     "last_name": "Ksh",
     "email": "missing_name_01@example.com",

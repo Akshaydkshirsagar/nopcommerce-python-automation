@@ -1,18 +1,26 @@
+
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 
 def test_nopcommerce_homepage(driver_setup):
-    print("Test started")
+    driver = driver_setup
+    driver.get("http://localhost:8090/")
 
-    driver_setup.get("http://localhost:8090")
+    wait = WebDriverWait(driver, 60)
 
-    WebDriverWait(driver_setup, 30).until(
-        EC.title_contains("Your store. Home page title")
+    # Wait until the page has a title
+    wait.until(lambda d: d.title.strip() != "")
+
+    actual_title = driver.title
+    actual_url = driver.current_url
+
+    print("Actual page title:", actual_title)
+    print("Current URL:", actual_url)
+
+    # Check the expected title
+    assert actual_title == "Your store. Home page title", (
+        f"Unexpected page title: {actual_title!r}; URL: {actual_url}"
     )
 
-    print("Actual page title:", driver_setup.title)
-    print("Current URL:", driver_setup.current_url)
-
-    assert driver_setup.title == "Your store. Home page title"
-    assert driver_setup.current_url == "http://localhost:8090/"
+    assert actual_url == "http://localhost:8090/"

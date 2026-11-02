@@ -82,7 +82,7 @@ jobs:
         working-directory: nopcommerce
         run: docker compose -f docker-compose.ci.yml up -d --build
 
-            - name: Diagnose nopCommerce startup
+      - name: Diagnose nopCommerce startup
         if: always()
         working-directory: nopcommerce
         run: |

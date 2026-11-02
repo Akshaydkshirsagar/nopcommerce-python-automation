@@ -82,6 +82,21 @@ jobs:
         working-directory: nopcommerce
         run: docker compose -f docker-compose.ci.yml up -d --build
 
+            - name: Diagnose nopCommerce startup
+        if: always()
+        working-directory: nopcommerce
+        run: |
+          echo "=== Container status ==="
+          docker compose -f docker-compose.ci.yml ps -a
+
+          echo "=== Web container logs ==="
+          docker compose -f docker-compose.ci.yml logs --tail=100 nopcommerce_web
+
+          echo "=== Database container status ==="
+          docker compose -f docker-compose.ci.yml logs --tail=50 nopcommerce_database
+        env:
+          MSSQL_SA_PASSWORD: CI_Test_Passw0rd!2026
+
       - name: Wait for nopCommerce HTTP response
         shell: bash
         run: |

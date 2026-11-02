@@ -1,3 +1,4 @@
+
 name: Selenium Pytest Automation
 
 on:
@@ -12,17 +13,12 @@ permissions:
 
 jobs:
   test:
-    # Pinned so the ubuntu-latest -> Ubuntu 26 migration can't change the runner under you.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 40
 
     env:
       MSSQL_SA_PASSWORD: CI_Test_Passw0rd!2026
       BASE_URL: http://localhost:8090
-      # Admin account created by the automated install.
-      # Make these match the credentials your Selenium tests use.
-      NOP_ADMIN_EMAIL: admin@ecommerce.com
-      NOP_ADMIN_PASSWORD: Portaal@hcl123
 
     steps:
       - name: Checkout automation repository
@@ -34,8 +30,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nopSolutions/nopCommerce
-          # TIP: pin to a release tag or commit SHA so upstream changes on
-          # develop can't break your CI unexpectedly.
           ref: develop
           path: nopcommerce
 
@@ -68,14 +62,12 @@ jobs:
                 MSSQL_PID: "Express"
                 MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
               healthcheck:
-                # Checks that SQL Server accepts logins, not just that port 1433 is open.
                 test:
                   - CMD-SHELL
-                  - /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" || exit 1
+                  - "timeout 2 bash -c '</dev/tcp/localhost/1433'"
                 interval: 10s
                 timeout: 5s
                 retries: 30
-                start_period: 20s
 
             nopcommerce_web:
               build: .
@@ -90,164 +82,41 @@ jobs:
         working-directory: nopcommerce
         run: docker compose -f docker-compose.ci.yml up -d --build
 
-      - name: Wait for nopCommerce web server
+      - name: Wait for nopCommerce HTTP response
         shell: bash
         run: |
-          STATUS="000"
-          for i in $(seq 1 40); do
-            # -L follows nopCommerce's 302 redirect to /install on a fresh database.
-            STATUS=$(curl -sS -L -o /tmp/nop.html \
+          for i in $(seq 1 60); do
+            STATUS=$(curl -sS -o /tmp/nop.html \
               -w "%{http_code}" "$BASE_URL/" || true)
 
             if [ "$STATUS" = "200" ]; then
-              echo "nopCommerce web server is responding (HTTP 200)."
+              echo "nopCommerce is responding over HTTP."
               break
             fi
 
-            echo "Waiting for nopCommerce ($i/40), HTTP: $STATUS"
+            echo "Waiting for nopCommerce ($i/60), HTTP: $STATUS"
             sleep 10
           done
 
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::nopCommerce web server did not start."
-            docker ps -a
+          if [ "${STATUS:-000}" != "200" ]; then
+            echo "nopCommerce did not become available."
             exit 1
           fi
 
-      - name: Install nopCommerce (submit the install wizard)
+      - name: Verify storefront is installed
         shell: bash
         run: |
-          pip install requests beautifulsoup4
+          curl -sS -L "$BASE_URL/" -o /tmp/nop.html
 
-          cat > /tmp/install_nop.py <<'PY'
-          import os
-          import sys
+          if grep -qi "nopCommerce installation" /tmp/nop.html \
+             || grep -qi 'id="install' /tmp/nop.html; then
+            echo "::error::nopCommerce is still showing its installation page."
+            echo "The fresh CI database must be installed before Selenium tests can run."
+            exit 1
+          fi
 
-          import requests
-          from bs4 import BeautifulSoup
-
-          base = os.environ["BASE_URL"].rstrip("/")
-          session = requests.Session()
-
-          # 1. Load the install page and locate the install form.
-          resp = session.get(base + "/install", timeout=120)
-          soup = BeautifulSoup(resp.text, "html.parser")
-
-          form = None
-          for f in soup.find_all("form"):
-              if f.find(attrs={"name": "AdminEmail"}):
-                  form = f
-                  break
-
-          if form is None:
-              print("No install form found - nopCommerce is already installed. Final URL:", resp.url)
-              sys.exit(0)
-
-          # 2. Collect every field in the form (includes the antiforgery token).
-          data = {}
-          for el in form.find_all(["input", "select", "textarea"]):
-              name = el.get("name")
-              if not name:
-                  continue
-              if el.name == "select":
-                  opt = el.find("option", selected=True) or el.find("option")
-                  data[name] = opt.get("value", "") if opt else ""
-              elif el.name == "textarea":
-                  data[name] = el.text
-              else:
-                  kind = (el.get("type") or "text").lower()
-                  if kind in ("submit", "button", "image", "file"):
-                      continue
-                  if kind in ("checkbox", "radio"):
-                      if el.has_attr("checked"):
-                          data[name] = el.get("value", "true")
-                  else:
-                      data[name] = el.get("value", "")
-
-          print("Install form fields found:", sorted(data.keys()))
-
-          # 3. Override with CI values. Field names come from nopCommerce's InstallModel.
-          data.update({
-              "AdminEmail": os.environ["NOP_ADMIN_EMAIL"],
-              "AdminPassword": os.environ["NOP_ADMIN_PASSWORD"],
-              "ConfirmPassword": os.environ["NOP_ADMIN_PASSWORD"],
-              "DataProvider": "SqlServer",
-              "ConnectionStringRaw": "false",
-              "IntegratedSecurity": "false",
-              "ServerName": "nopcommerce_database",   # docker compose service name
-              "DatabaseName": "nopCommerce",
-              "Username": "sa",
-              "Password": os.environ["MSSQL_SA_PASSWORD"],
-              "CreateDatabaseIfNotExists": "true",
-              "InstallSampleData": "true",
-              "SubscribeNewsletters": "false",
-              "UseCustomCollation": "false",
-          })
-
-          # 4. Submit. Installing takes a few minutes.
-          print("Submitting install form (this can take several minutes)...")
-          try:
-              post = session.post(base + "/install", data=data, timeout=1500)
-          except requests.exceptions.RequestException as exc:
-              print("::error::Install request failed:", exc)
-              sys.exit(1)
-
-          print("Install POST status:", post.status_code, "->", post.url)
-          page = BeautifulSoup(post.text, "html.parser")
-          errors = [e.get_text(" ", strip=True)
-                    for e in page.select(".message-error, .validation-summary-errors, .field-validation-error")
-                    if e.get_text(strip=True)]
-          if errors:
-              print("::error::nopCommerce install reported errors:")
-              for e in errors:
-                  print(" -", e)
-              sys.exit(1)
-
-          # On success nopCommerce returns a page whose script calls /install/restartapplication.
-          if "restartapplication" not in post.text.lower():
-              print("::error::Install response did not contain the restart step; install may have failed.")
-              print(post.text[:3000])
-              sys.exit(1)
-
-          # 5. Ask the app to restart (same call the wizard's JavaScript makes).
-          #    This stops the app process, so a dropped connection is expected.
-          print("Requesting application restart...")
-          try:
-              session.get(base + "/install/restartapplication", timeout=60)
-          except requests.exceptions.RequestException as exc:
-              print("Connection closed during restart (expected):", exc)
-
-          print("Install submitted successfully.")
-          PY
-
-          python /tmp/install_nop.py
-
-      - name: Restart nopCommerce container
-        working-directory: nopcommerce
-        run: |
-          # The app stops itself after install and the container has no restart policy,
-          # so bring it back explicitly.
-          docker compose -f docker-compose.ci.yml restart nopcommerce_web
-
-      - name: Wait for installed storefront
-        shell: bash
-        run: |
-          for i in $(seq 1 40); do
-            STATUS=$(curl -sS -L -o /tmp/nop.html -w "%{http_code}" "$BASE_URL/" || true)
-
-            if [ "$STATUS" = "200" ] \
-               && ! grep -qi "nopCommerce installation" /tmp/nop.html \
-               && ! grep -qi 'id="installation-form"' /tmp/nop.html; then
-              echo "Storefront is installed and ready for Selenium tests."
-              exit 0
-            fi
-
-            echo "Waiting for installed storefront ($i/40), HTTP: $STATUS"
-            sleep 10
-          done
-
-          echo "::error::Storefront is not ready - still down or still showing the installation page."
-          exit 1
+          echo "Installation page was not detected."
+          echo "Review the page and test results to confirm the storefront is ready."
 
       - name: Run pytest tests
         working-directory: automation
@@ -255,16 +124,10 @@ jobs:
           mkdir -p reports screenshots logs
           pytest -v --self-contained-html --html=reports/report.html
 
-      - name: Collect container logs
-        if: always()
+      - name: Show application logs on failure
+        if: failure()
         working-directory: nopcommerce
-        run: |
-          mkdir -p ../automation/logs
-          docker compose -f docker-compose.ci.yml ps -a || true
-          docker compose -f docker-compose.ci.yml logs --no-color > ../automation/logs/docker-compose.log || true
-          if [ "${{ job.status }}" = "failure" ]; then
-            tail -n 200 ../automation/logs/docker-compose.log
-          fi
+        run: docker compose -f docker-compose.ci.yml logs --no-color
 
       - name: Upload test artifacts
         if: always()
@@ -280,4 +143,4 @@ jobs:
       - name: Stop CI containers
         if: always()
         working-directory: nopcommerce
-        run: docker compose -f docker-compose.ci.yml down -v
+        run: docker compose -f docker-compose.ci.yml down

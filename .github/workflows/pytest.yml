@@ -101,7 +101,9 @@ jobs:
             automation/screenshots/
             automation/logs/
           if-no-files-found: warn
-
+         
       - name: Show application logs on failure
         if: failure()
         run: docker compose -f nopcommerce/docker-compose.ci.yml logs
+        env:
+         MSSQL_SA_PASSWORD: CI_Test_Passw0rd!2026

@@ -13,15 +13,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout automation repository
         uses: actions/checkout@v4
+        with:
+          path: automation
+
+      - name: Checkout nopCommerce source
+        uses: actions/checkout@v4
+        with:
+          repository: nopSolutions/nopCommerce
+          ref: develop
+          path: nopcommerce
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install Python dependencies
+        working-directory: automation
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -29,15 +39,69 @@ jobs:
       - name: Install Chrome
         uses: browser-actions/setup-chrome@v1
 
-      - name: Run pytest tests
+      - name: Start SQL Server and nopCommerce
+        working-directory: nopcommerce
+        env:
+          MSSQL_SA_PASSWORD: CI_Test_Passw0rd!2026
         run: |
-          pytest -v --self-contained-html --html=reports/report.html
-        continue-on-error: true
+          cat > docker-compose.ci.yml <<'EOF'
+          services:
+            nopcommerce_database:
+              image: mcr.microsoft.com/mssql/server:2019-latest
+              environment:
+                ACCEPT_EULA: "Y"
+                MSSQL_PID: "Express"
+                MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
+              healthcheck:
+                test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/1433'"]
+                interval: 10s
+                timeout: 5s
+                retries: 20
 
-      - name: Upload HTML report
+            nopcommerce_web:
+              build: .
+              ports:
+                - "8090:80"
+              depends_on:
+                nopcommerce_database:
+                  condition: service_healthy
+
+          volumes: {}
+          EOF
+
+          docker compose -f docker-compose.ci.yml up -d --build
+
+      - name: Wait for nopCommerce
+        run: |
+          for i in $(seq 1 60); do
+            if curl --silent --fail http://localhost:8090/ -o /dev/null; then
+              echo "nopCommerce is responding"
+              exit 0
+            fi
+            echo "Waiting for nopCommerce ($i/60)"
+            sleep 10
+          done
+
+          docker compose -f nopcommerce/docker-compose.ci.yml logs
+          exit 1
+
+      - name: Run pytest tests
+        working-directory: automation
+        run: |
+          mkdir -p reports screenshots logs
+          pytest -v --self-contained-html --html=reports/report.html
+
+      - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-html-report
-          path: reports/report.html
+          name: pytest-test-artifacts
+          path: |
+            automation/reports/
+            automation/screenshots/
+            automation/logs/
           if-no-files-found: warn
+
+      - name: Show application logs on failure
+        if: failure()
+        run: docker compose -f nopcommerce/docker-compose.ci.yml logs

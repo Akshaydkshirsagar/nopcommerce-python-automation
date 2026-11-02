@@ -85,7 +85,7 @@ jobs:
         working-directory: nopcommerce
         run: docker compose -f docker-compose.ci.yml up -d --build
 
-      - name: Wait for nopCommerce to respond
+      - name: Wait for nopCommerce HTTP response
         shell: bash
         run: |
           READY=false
@@ -115,7 +115,7 @@ jobs:
             exit 1
           fi
 
-          echo "The web server is responding."
+          echo "Web server is responding."
 
       - name: Install nopCommerce if required
         working-directory: nopcommerce
@@ -133,38 +133,29 @@ jobs:
           base = os.environ["BASE_URL"].rstrip("/")
           session = requests.Session()
 
-          def get_page(url):
-              response = session.get(url, timeout=30)
-              response.raise_for_status()
-              return response
+          response = session.get(base + "/install", timeout=30)
+          response.raise_for_status()
 
-          response = get_page(base + "/install")
           soup = BeautifulSoup(response.text, "html.parser")
-
           form = None
+
           for candidate in soup.find_all("form"):
               if candidate.find("input", {"name": "AdminEmail"}):
                   form = candidate
                   break
 
           if form is None:
-              home = get_page(base + "/")
-              home_soup = BeautifulSoup(home.text, "html.parser")
+              home = session.get(base + "/", timeout=30)
+              home.raise_for_status()
 
-              if home_soup.find(
-                  "input", {"name": "AdminEmail"}
-              ) or "nopCommerce installation" in home.text:
-                  print("ERROR: Installer page found, but its form was not recognized.")
-                  print("Final installer URL:", response.url)
-                  print(response.text[:5000])
-                  sys.exit(1)
-
-              print("No installer form detected. Checking the installed storefront.")
               if "/install" in home.url.lower():
-                  print("ERROR: Still redirected to the installer.")
+                  print("ERROR: Installer redirect detected, but form was not recognized.")
+                  print("Final URL:", home.url)
+                  print(home.text[:4000])
                   sys.exit(1)
 
-              print("Storefront is already installed.")
+              print("No installer form detected; checking existing installation.")
+              print("Home URL:", home.url)
               sys.exit(0)
 
           print("Installer form detected:", response.url)
@@ -203,26 +194,37 @@ jobs:
           data["AdminPassword"] = os.environ["NOP_ADMIN_PASSWORD"]
           data["ConfirmPassword"] = os.environ["NOP_ADMIN_PASSWORD"]
 
-          # Select the SQL Server provider offered by this installer.
+          # Select the provider using its visible label.
           provider_select = form.find("select", {"name": "DataProvider"})
+
           if provider_select:
               options = provider_select.find_all("option")
+
               sql_option = next(
                   (
                       option for option in options
-                      if "sqlserver" in (
-                          option.get("value", "") + " " + option.text
-                      ).lower()
+                      if "microsoft sql server"
+                      in option.get_text(" ", strip=True).lower()
                   ),
                   None,
               )
-              if sql_option is None:
-                  print("ERROR: SQL Server provider option not found.")
-                  print([(o.get("value"), o.text.strip()) for o in options])
-                  sys.exit(1)
-              data["DataProvider"] = sql_option.get("value", "")
 
-          # These are the expected SQL Server installer model fields.
+              if sql_option is None:
+                  print("ERROR: Microsoft SQL Server option not found.")
+                  print([
+                      (o.get("value"), o.get_text(" ", strip=True))
+                      for o in options
+                  ])
+                  sys.exit(1)
+
+              data["DataProvider"] = sql_option.get("value", "")
+              print("Selected provider:", sql_option.get_text(strip=True))
+              print("Provider value:", data["DataProvider"])
+          else:
+              print("ERROR: DataProvider select field not found.")
+              sys.exit(1)
+
+          # Expected SQL Server installer fields.
           data.update({
               "ConnectionStringRaw": "false",
               "IntegratedSecurity": "false",
@@ -236,11 +238,12 @@ jobs:
               "UseCustomCollation": "false",
           })
 
-          action = urljoin(response.url, form.get("action") or response.url)
+          action = urljoin(
+              response.url,
+              form.get("action") or response.url
+          )
 
           print("Submitting installation form to:", action)
-          print("Database server: nopcommerce_database")
-          print("Database name: nopCommerce")
 
           result = session.post(
               action,
@@ -249,7 +252,7 @@ jobs:
               allow_redirects=True,
           )
 
-          print("Installation response status:", result.status_code)
+          print("Installation response:", result.status_code)
           print("Installation final URL:", result.url)
 
           result_soup = BeautifulSoup(result.text, "html.parser")
@@ -266,7 +269,7 @@ jobs:
                       errors.append(message)
 
           if errors:
-              print("Installation validation errors:")
+              print("Installer validation errors:")
               for error in errors:
                   print("-", error)
               sys.exit(1)
@@ -275,25 +278,24 @@ jobs:
               print(result.text[:5000])
               sys.exit(1)
 
-          # Installation may request an application restart.
-          restart_url = urljoin(base + "/", "install/restartapplication")
+          restart_url = base + "/install/restartapplication"
+
           try:
               restart = session.get(restart_url, timeout=30)
               print("Restart endpoint status:", restart.status_code)
           except requests.RequestException as exc:
-              print("Restart request disconnected (may be expected):", exc)
+              print("Restart disconnected; this may be expected:", exc)
 
-          print("Installation form submitted; verifying after restart.")
+          print("Installer form submitted; storefront verification follows.")
           PY
 
           python /tmp/install_nop.py
 
       - name: Restart nopCommerce web container
         working-directory: nopcommerce
-        run: |
-          docker compose -f docker-compose.ci.yml restart nopcommerce_web
+        run: docker compose -f docker-compose.ci.yml restart nopcommerce_web
 
-      - name: Wait for installed storefront
+      - name: Verify installed storefront
         shell: bash
         run: |
           READY=false
@@ -322,7 +324,6 @@ jobs:
 
           if [ "$READY" != "true" ]; then
             echo "::error::Storefront is not ready or installation is incomplete."
-            echo "Final URL and response:"
             curl -sS -L -D /tmp/nop-headers.txt \
               -o /tmp/nop-home.html "$BASE_URL/" || true
             cat /tmp/nop-headers.txt || true
